@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  
+  db:
+    image: postgres:13-alpine
+    container_name: scm_db
+    environment:
+      - POSTGRES_USER=scm_user
+      - POSTGRES_PASSWORD=scm_password
+      - POSTGRES_DB=scm_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/init:/docker-entrypoint-initdb.d
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scm_user -d scm_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    container_name: scm_backend
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://scm_user:scm_password@db:5432/scm_db
+    volumes:
+      - ./backend:/app
+      - ./optimizer:/optimizer # Share optimizer volume to call its script
+    depends_on:
+      db:
+        condition: service_healthy
+
+  optimizer:
+    container_name: scm_optimizer
+    build:
+      context: ./optimizer
+    environment:
+      - DATABASE_URL=postgresql://scm_user:scm_password@db:5432/scm_db
+    volumes:
+      - ./optimizer:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    # This service runs as a "headless" worker,
+    # so it doesn't need to expose ports. It's triggered by the backend.
+    # We add a dummy command to keep it alive if needed, 
+    # but it's designed to be run as a script.
+    command: tail -f /dev/null
+
+  frontend:
+    container_name: scm_frontend
+    image: nginx:alpine
+    ports:
+      - "8081:80" # We use 8081 to avoid conflict with 8000
+    volumes:
+      - ./frontend:/usr/share/nginx/html
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+
